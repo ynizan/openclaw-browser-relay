@@ -1,0 +1,21 @@
+{
+  "name": "openclaw-browser-relay",
+  "version": "0.1.0",
+  "description": "Always-on OpenClaw browser relay extension with auto-attach to all tabs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.js",
+    "watch": "node esbuild.config.js --watch",
+    "clean": "rm -rf dist",
+    "package": "npm run build && cd dist && zip -r ../openclaw-browser-relay.zip .",
+    "test": "npx playwright test",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.0",
+    "@types/chrome": "^0.0.287",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  }
+}
