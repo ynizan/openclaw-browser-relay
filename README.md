@@ -1,49 +1,95 @@
-# OpenClaw Browser Relay (Auto-Attach)
+# OpenClaw Browser Relay — Auto-Attach Patch
 
-A fork of the official OpenClaw browser relay extension that **auto-attaches the Chrome debugger to all tabs** — no manual clicking required.
+Patches the official OpenClaw browser relay extension to **auto-attach the Chrome debugger to all tabs** — no manual clicking required.
 
 ```
 OpenClaw Gateway <-> CDP Relay (:18792) <-WS-> Extension <-chrome.debugger-> All Tabs
 ```
 
-## Prerequisites
+## Quick Start
 
-- Node.js 20+
-- Chrome or Chromium browser
-- Running OpenClaw gateway with browser relay enabled (`OPENCLAW_GATEWAY_TOKEN` set)
-
-## Build from Source
+### 1. Install the official extension
 
 ```bash
-git clone https://github.com/ynizan/openclaw-browser-relay.git
-cd openclaw-browser-relay
-npm install
-npm run build
+npm install -g openclaw@latest
+openclaw browser extension install
 ```
 
-The built extension will be in the `dist/` directory.
+### 2. Get the extension path
 
-## Install in Chrome
+```bash
+openclaw browser extension path
+# e.g. ~/.openclaw/browser/chrome-extension/
+```
 
-1. Navigate to `chrome://extensions/`
-2. Enable **Developer mode** (top right toggle)
-3. Click **Load unpacked** and select the `dist/` directory
-4. Chrome will show a "This extension can debug your browser" warning — this is expected, as CDP access requires the `debugger` permission
+### 3. Load in Chrome (unpacked)
+
+1. `chrome://extensions/` -> enable **Developer mode**
+2. **Load unpacked** -> select the path from step 2
+3. Set your **gateway token** in the extension options page
+4. Verify the relay is reachable (green status)
+
+### 4. Apply the auto-attach patch
+
+```bash
+python3 patch_auto_attach.py
+```
+
+Or specify the path explicitly:
+
+```bash
+python3 patch_auto_attach.py ~/.openclaw/browser/chrome-extension/
+```
+
+### 5. Reload the extension
+
+Go to `chrome://extensions/` and click the reload button on the extension.
+
+Chrome will show a "This extension can debug your browser" warning — expected for CDP access.
+
+## What the Patch Changes
+
+| Feature | Official | Patched |
+|---------|----------|---------|
+| Tab attachment | Manual click per tab | Auto-attach all tabs |
+| Host permissions | Per-site | `<all_urls>` |
+| Extra permissions | — | `cookies`, `downloads` |
+| Keepalive interval | 30s | 24s |
+| Custom commands | — | Tab, Cookie, Download APIs |
+| Options page | Port + token | + status panel, auto-attach toggle, download dir |
+| Badge | ON/OFF per tab | Green+count / Yellow / Red globally |
+
+The patch preserves the original's gateway handshake protocol, reconnect logic, and state persistence.
+
+## Reverting
+
+The script backs up all original files before patching:
+
+```bash
+cp ~/.openclaw/browser/chrome-extension/.backup-before-autoattach/* \
+   ~/.openclaw/browser/chrome-extension/
+```
+
+Or just reinstall:
+
+```bash
+openclaw browser extension install
+```
 
 ## Configure
 
-The extension opens its options page automatically on first install.
+The extension opens its options page on first install.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | **Relay port** | `18792` | WebSocket relay port (typically gateway port + 3) |
-| **Gateway token** | — | Must match `OPENCLAW_GATEWAY_TOKEN` env var or `gateway.auth.token` in your gateway config |
+| **Gateway token** | — | Must match `OPENCLAW_GATEWAY_TOKEN` env var or `gateway.auth.token` |
 | **Auto-attach** | ON | Automatically attach debugger to all tabs |
 | **Download directory** | — | Optional default download path |
 
 ### Token Derivation
 
-The extension doesn't send your gateway token directly. Instead, it derives a relay-specific token using HMAC-SHA256:
+The extension derives a relay-specific token (never sends the gateway token directly):
 
 ```
 relayToken = HMAC-SHA256(gatewayToken, "openclaw-extension-relay-v1:<port>")
@@ -51,81 +97,68 @@ relayToken = HMAC-SHA256(gatewayToken, "openclaw-extension-relay-v1:<port>")
 
 ## How It Works
 
-1. On startup, the extension connects via WebSocket to `ws://127.0.0.1:<port>/extension?token=<derived>`
-2. It auto-attaches the Chrome debugger to all open tabs
-3. OpenClaw sends CDP commands through the relay, and the extension executes them via `chrome.debugger`
+1. On startup, connects via WebSocket to `ws://127.0.0.1:<port>/extension?token=<derived>`
+2. Completes gateway handshake (connect.challenge / connect protocol v3)
+3. Auto-attaches Chrome debugger to all open tabs
 4. New tabs are automatically attached as they open
-5. On navigation, the debugger re-attaches automatically (3 retries: 300ms, 700ms, 1500ms)
-6. A keepalive alarm fires every ~24s to prevent MV3 service worker termination
+5. On navigation, re-attaches automatically (3 retries: 300ms, 700ms, 1500ms)
+6. Keepalive alarm every ~24s prevents MV3 service worker termination
 
 ## Badge Indicators
 
 | Badge | Meaning |
 |-------|---------|
 | Green + number | Connected to relay, N tabs attached |
-| Yellow | Connected to relay, no tabs attached |
+| Yellow | Connected, no tabs attached |
 | Red | Disconnected from relay |
 
 Click the extension icon to toggle attach/detach all tabs.
 
 ## Custom Commands
 
-Beyond standard CDP protocol commands, the extension supports:
+Beyond standard CDP, the patched extension supports:
 
 ### Tab Management
 - `Tab.list` — list all attached tabs with session IDs
 - `Tab.attachAll` — force attach to all open tabs
-- `Tab.getStatus` — get extension status (WS state, attached count, uptime)
+- `Tab.getStatus` — extension status (WS state, attached count, uptime)
 
 ### Cookies
 - `Cookie.getAll` — get cookies (filter by domain, url, name)
-- `Cookie.set` — set a cookie
-- `Cookie.remove` — remove a cookie
-- `Cookie.export` — export cookies for a domain/url
-- `Cookie.import` — import an array of cookies
+- `Cookie.set` / `Cookie.remove`
+- `Cookie.export` / `Cookie.import`
 
 ### Downloads
-- `Download.start` — start a download
-- `Download.list` — list recent downloads
-- `Download.getStatus` — get status of a download
-- `Download.cancel` — cancel an active download
-- `Download.open` — open a completed download
-
-## Differences from Official Extension
-
-| Feature | Official | This Fork |
-|---------|----------|-----------|
-| Tab attachment | Manual click per tab | Auto-attach all tabs |
-| Host permissions | Per-site | `<all_urls>` |
-| Extra permissions | — | `cookies`, `downloads` |
-| Reconnect | Basic | Exponential backoff with jitter (1s–30s) |
-| Service worker survival | — | Keepalive alarm every 24s |
-| State persistence | — | Survives service worker restarts via `chrome.storage.session` |
-| Custom commands | — | Tab, Cookie, Download APIs |
-
-## Development
-
-```bash
-npm run watch      # dev build with file watching and source maps
-npm run lint       # TypeScript type checking (tsc --noEmit)
-npm run test       # Playwright tests
-npm run package    # build + zip for distribution
-```
+- `Download.start` / `Download.list` / `Download.getStatus`
+- `Download.cancel` / `Download.open`
 
 ## Troubleshooting
 
 **Red badge (disconnected)**
-- Verify the CDP relay is running on the configured port
-- Check that the gateway token matches your `OPENCLAW_GATEWAY_TOKEN`
-- Look at the service worker console (`chrome://extensions/` -> Inspect views) for error details
+- Verify the CDP relay is running: `curl http://127.0.0.1:18792/json/version`
+- Check gateway token matches `OPENCLAW_GATEWAY_TOKEN`
+- Inspect service worker console: `chrome://extensions/` -> Inspect views
 
 **"Debugger detached" warnings**
-- Normal during page navigation — the extension automatically re-attaches within ~1.5s
+- Normal during navigation — auto-reattaches within ~1.5s
 
 **Service worker stopped**
-- The keepalive alarm restores the connection within 24 seconds
-- State is persisted via `chrome.storage.session`, so attached tabs are rehydrated on restart
+- Keepalive alarm restores connection within 24s
+- State persisted via `chrome.storage.session`
 
 **Extension not attaching to a tab**
-- `chrome://`, `chrome-extension://`, `about:`, and `devtools://` URLs are intentionally skipped
-- The extension's own options page is also excluded
+- `chrome://`, `chrome-extension://`, `about:`, `devtools://` URLs are skipped
+- The extension's own options page is excluded
+
+## Development (fork)
+
+This repo also contains a TypeScript fork with build tooling:
+
+```bash
+npm install
+npm run build     # build to dist/
+npm run watch     # dev mode with source maps
+npm run lint      # TypeScript type checking
+npm run test      # Playwright tests
+npm run package   # build + zip
+```
